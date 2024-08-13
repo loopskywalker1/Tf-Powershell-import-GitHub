@@ -1,0 +1,129 @@
+
+```powershell
+# Required module, install if not present
+if (-not (Get-Module -ListAvailable -Name PowerShellForGitHub)) {
+    Install-Module -Name PowerShellForGitHub -Force -Scope CurrentUser
+}
+
+Import-Module PowerShellForGitHub
+
+# Function to generate Terraform block and import command for GitHub repository
+function New-GitHubRepoBlock {
+    param (
+        [string]$RepoName,
+        [string]$Description,
+        [bool]$Private,
+        [string]$Owner
+    )
+
+    $safeName = $RepoName -replace '-', '_'
+    $block = @"
+resource "github_repository" "$safeName" {
+  name        = "$RepoName"
+  description = "$Description"
+  private     = $($Private.ToString().ToLower())
+
+  # Add other attributes as needed
+}
+
+"@
+    $importCmd = "terraform import github_repository.$safeName $Owner/$RepoName"
+    return @{Block = $block; ImportCmd = $importCmd}
+}
+
+# Function to generate Terraform block and import command for GitHub team
+function New-GitHubTeamBlock {
+    param (
+        [string]$TeamName,
+        [string]$TeamId,
+        [string]$Description
+    )
+
+    $safeName = $TeamName -replace '-', '_'
+    $block = @"
+resource "github_team" "$safeName" {
+  name        = "$TeamName"
+  description = "$Description"
+  privacy     = "closed"
+
+  # Add other attributes as needed
+}
+
+"@
+    $importCmd = "terraform import github_team.$safeName $TeamId"
+    return @{Block = $block; ImportCmd = $importCmd}
+}
+
+# Main script
+$ErrorActionPreference = "Stop"
+
+# Get company name
+$companyName = Read-Host "Enter your company name"
+
+# Authenticate with GitHub
+$token = Read-Host "Enter your GitHub Personal Access Token" -AsSecureString
+$cred = New-Object System.Management.Automation.PSCredential "username", $token
+Set-GitHubAuthentication -Credential $cred
+
+# Get GitHub organization name
+$orgName = Read-Host "Enter your GitHub organization name"
+
+# Initialize Terraform configuration
+$terraformCode = @"
+terraform {
+  required_providers {
+    github = {
+      source  = "integrations/github"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "github" {
+  token = var.github_token
+  owner = "$orgName"
+}
+
+variable "github_token" {
+  type        = string
+  description = "GitHub Personal Access Token"
+}
+
+"@
+
+$importCommands = @("# Run these commands to import existing GitHub resources into Terraform state")
+
+# Get repositories
+Write-Host "Fetching repositories..."
+$repos = Get-GitHubRepository -OrganizationName $orgName
+
+foreach ($repo in $repos) {
+    $repoBlock = New-GitHubRepoBlock -RepoName $repo.name -Description $repo.description -Private $repo.private -Owner $orgName
+    $terraformCode += $repoBlock.Block
+    $importCommands += $repoBlock.ImportCmd
+}
+
+# Get teams
+Write-Host "Fetching teams..."
+$teams = Get-GitHubTeam -OrganizationName $orgName
+
+foreach ($team in $teams) {
+    $teamBlock = New-GitHubTeamBlock -TeamName $team.name -TeamId $team.id -Description $team.description
+    $terraformCode += $teamBlock.Block
+    $importCommands += $teamBlock.ImportCmd
+}
+
+# Generate filenames with company name
+$tfFileName = "${companyName}_${orgName}_github_setup.tf".ToLower()
+$importFileName = "${companyName}_${orgName}_Import-TerraformState.ps1".ToLower()
+
+# Output the Terraform code to a file
+$terraformCode | Out-File -FilePath $tfFileName
+
+# Output import commands to a PowerShell script
+$importCommands | Out-File -FilePath $importFileName
+
+Write-Host "Terraform code has been generated and saved to '$tfFileName'"
+Write-Host "Import commands have been saved to '$importFileName'"
+Write-Host "Review these files, then run the $importFileName script to create your Terraform state"
+```
