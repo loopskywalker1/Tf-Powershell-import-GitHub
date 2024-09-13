@@ -1,129 +1,217 @@
+# File: main.tf
+# This file contains all the necessary Terraform code for setting up the "Check Java Version" project in Octopus Deploy.
 
-```powershell
-# Required module, install if not present
-if (-not (Get-Module -ListAvailable -Name PowerShellForGitHub)) {
-    Install-Module -Name PowerShellForGitHub -Force -Scope CurrentUser
+# Step 1: Define the Octopus provider and required variables
+provider "octopusdeploy" {
+  api_key = var.octopus_api_key
+  address = var.octopus_server
 }
 
-Import-Module PowerShellForGitHub
-
-# Function to generate Terraform block and import command for GitHub repository
-function New-GitHubRepoBlock {
-    param (
-        [string]$RepoName,
-        [string]$Description,
-        [bool]$Private,
-        [string]$Owner
-    )
-
-    $safeName = $RepoName -replace '-', '_'
-    $block = @"
-resource "github_repository" "$safeName" {
-  name        = "$RepoName"
-  description = "$Description"
-  private     = $($Private.ToString().ToLower())
-
-  # Add other attributes as needed
+# Step 2: Define Variables (could be provided in a separate "terraform.tfvars" file)
+variable "octopus_api_key" {
+  description = "API key for Octopus Deploy"
+  type        = string
 }
 
-"@
-    $importCmd = "terraform import github_repository.$safeName $Owner/$RepoName"
-    return @{Block = $block; ImportCmd = $importCmd}
+variable "octopus_server" {
+  description = "URL of the Octopus Deploy server"
+  type        = string
 }
 
-# Function to generate Terraform block and import command for GitHub team
-function New-GitHubTeamBlock {
-    param (
-        [string]$TeamName,
-        [string]$TeamId,
-        [string]$Description
-    )
-
-    $safeName = $TeamName -replace '-', '_'
-    $block = @"
-resource "github_team" "$safeName" {
-  name        = "$TeamName"
-  description = "$Description"
-  privacy     = "closed"
-
-  # Add other attributes as needed
+variable "ssh_user" {
+  description = "SSH username for the deployment targets"
+  type        = string
 }
 
-"@
-    $importCmd = "terraform import github_team.$safeName $TeamId"
-    return @{Block = $block; ImportCmd = $importCmd}
+variable "ssh_private_key" {
+  description = "Path to the SSH private key used for connecting"
+  type        = string
 }
 
-# Main script
-$ErrorActionPreference = "Stop"
+# Step 3: Create a new project in Octopus for Java version checking
+resource "octopusdeploy_project" "java_version_check" {
+  name              = "Check Java Version"
+  lifecycle_id      = octopusdeploy_lifecycle.lc_java.id
+  project_group_id  = octopusdeploy_project_group.pg_java.id
+  description       = "Project to check the Java version on deployment targets"
+  is_version_controlled = false
+}
 
-# Get company name
-$companyName = Read-Host "Enter your company name"
+# Step 4: Create a lifecycle for the Java version check project
+resource "octopusdeploy_lifecycle" "lc_java" {
+  name = "Java Version Check Lifecycle"
+}
 
-# Authenticate with GitHub
-$token = Read-Host "Enter your GitHub Personal Access Token" -AsSecureString
-$cred = New-Object System.Management.Automation.PSCredential "username", $token
-Set-GitHubAuthentication -Credential $cred
+# Step 5: Define the project group where this project will be housed
+resource "octopusdeploy_project_group" "pg_java" {
+  name = "Java Tools"
+}
 
-# Get GitHub organization name
-$orgName = Read-Host "Enter your GitHub organization name"
+# Step 6: Create a runbook to execute the Java check on deployment targets
+resource "octopusdeploy_runbook" "check_java_version" {
+  project_id = octopusdeploy_project.java_version_check.id
+  name       = "Check Java Version"
+  description = "Run a script on deployment targets to check the Java version"
+}
 
-# Initialize Terraform configuration
-$terraformCode = @"
-terraform {
-  required_providers {
-    github = {
-      source  = "integrations/github"
-      version = "~> 5.0"
+# Step 7: Create the deployment process that includes the step to run the script
+resource "octopusdeploy_deployment_process" "dp_check_java" {
+  project_id = octopusdeploy_project.java_version_check.id
+
+  step {
+    name = "Check Java Version"
+    package_requirement = "let_octopus_deploy_choose"
+
+    action {
+      name   = "Run SSH Script"
+      action_type = "Octopus.Script"
+
+      worker_pool_id = "SomeWorkerPool" # Replace with your worker pool ID
+
+      properties = {
+        "Octopus.Action.Script.ScriptBody" = <<EOT
+#!/bin/bash
+java -version
+if [ $? -eq 0 ]; then
+  echo "Java is installed and version is:"
+  java -version
+else
+  echo "Java is not installed"
+  exit 1
+fi
+EOT
+      }
     }
   }
 }
 
-provider "github" {
-  token = var.github_token
-  owner = "$orgName"
+# Step 8: Define deployment targets (assuming you are using SSH to connect)
+resource "octopusdeploy_deployment_target" "linux_targets" {
+  name               = "My Linux Server"
+  roles              = ["java-server"]
+  endpoint {
+    communication_style = "SSH"
+    host                = "10.0.0.1" # Replace with your deployment target IP
+    port                = 22
+    username            = var.ssh_user
+    private_key_file    = var.ssh_private_key
+  }
+  environment_ids = [octopusdeploy_environment.env_java.id]
 }
 
-variable "github_token" {
+# Step 9: Define the environment for the deployment targets
+resource "octopusdeploy_environment" "env_java" {
+  name = "Java Servers"
+}
+
+# Step 10: Optionally, define a schedule or trigger for the runbook
+resource "octopusdeploy_runbook_trigger" "runbook_trigger" {
+  runbook_id = octopusdeploy_runbook.check_java_version.id
+  description = "Run the Java version check every week"
+  filter {
+    environment_ids = [octopusdeploy_environment.env_java.id]
+    roles = ["java-server"]
+  }
+  schedule {
+    interval = "Week"
+  }
+}
+
+# You can apply this using:
+# terraform init
+# terraform plan
+# terraform apply
+
+# Octopus Deploy provider configuration
+provider "octopusdeploy" {
+  address  = var.octopus_server_url
+  api_key  = var.octopus_api_key
+  space_id = var.octopus_space_id
+}
+
+# Variables
+variable "octopus_server_url" {
   type        = string
-  description = "GitHub Personal Access Token"
+  description = "The URL of your Octopus Deploy server"
 }
 
-"@
-
-$importCommands = @("# Run these commands to import existing GitHub resources into Terraform state")
-
-# Get repositories
-Write-Host "Fetching repositories..."
-$repos = Get-GitHubRepository -OrganizationName $orgName
-
-foreach ($repo in $repos) {
-    $repoBlock = New-GitHubRepoBlock -RepoName $repo.name -Description $repo.description -Private $repo.private -Owner $orgName
-    $terraformCode += $repoBlock.Block
-    $importCommands += $repoBlock.ImportCmd
+variable "octopus_api_key" {
+  type        = string
+  description = "API key for Octopus Deploy"
+  sensitive   = true
 }
 
-# Get teams
-Write-Host "Fetching teams..."
-$teams = Get-GitHubTeam -OrganizationName $orgName
-
-foreach ($team in $teams) {
-    $teamBlock = New-GitHubTeamBlock -TeamName $team.name -TeamId $team.id -Description $team.description
-    $terraformCode += $teamBlock.Block
-    $importCommands += $teamBlock.ImportCmd
+variable "octopus_space_id" {
+  type        = string
+  description = "ID of the space in Octopus Deploy"
 }
 
-# Generate filenames with company name
-$tfFileName = "${companyName}_${orgName}_github_setup.tf".ToLower()
-$importFileName = "${companyName}_${orgName}_Import-TerraformState.ps1".ToLower()
+# Project
+resource "octopusdeploy_project" "java_version_test" {
+  name        = "Java Version Test"
+  description = "Project to test Java versions on deployment targets"
+  lifecycle_id = data.octopusdeploy_lifecycle.default_lifecycle.id
+  project_group_id = data.octopusdeploy_project_group.default_project_group.id
+  is_disabled = false
 
-# Output the Terraform code to a file
-$terraformCode | Out-File -FilePath $tfFileName
+  included_library_variable_sets = [
+    data.octopusdeploy_library_variable_set.java_variables.id
+  ]
+}
 
-# Output import commands to a PowerShell script
-$importCommands | Out-File -FilePath $importFileName
+# Environment
+resource "octopusdeploy_environment" "test_environment" {
+  name        = "Java Version Test Environment"
+  description = "Environment for testing Java versions"
+}
 
-Write-Host "Terraform code has been generated and saved to '$tfFileName'"
-Write-Host "Import commands have been saved to '$importFileName'"
-Write-Host "Review these files, then run the $importFileName script to create your Terraform state"
-```
+# Deployment process
+resource "octopusdeploy_deployment_process" "java_version_test" {
+  project_id = octopusdeploy_project.java_version_test.id
+
+  step {
+    name = "Check Java Version"
+    
+    action {
+      action_type    = "Octopus.Script"
+      name           = "Check Java Version"
+      run_on_server  = false
+
+      properties = {
+        "Octopus.Action.Script.ScriptSource" = "Inline"
+        "Octopus.Action.Script.Syntax"       = "Bash"
+        "Octopus.Action.Script.ScriptBody"   = <<-EOT
+          #!/bin/bash
+          java_version=$(java -version 2>&1 | awk -F '"' '/version/ {print $2}')
+          echo "Java version: $java_version"
+          
+          # Compare with expected version
+          if [[ "$java_version" == "#{Java.ExpectedVersion}" ]]; then
+            echo "Java version matches expected version"
+          else
+            echo "Java version does not match expected version"
+            exit 1
+          fi
+        EOT
+      }
+    }
+  }
+}
+
+# Data sources
+data "octopusdeploy_lifecycle" "default_lifecycle" {
+  name = "Default Lifecycle"
+}
+
+data "octopusdeploy_project_group" "default_project_group" {
+  name = "Default Project Group"
+}
+
+data "octopusdeploy_library_variable_set" "java_variables" {
+  name = "Java Variables"
+}
+
+# Output
+output "project_id" {
+  value = octopusdeploy_project.java_version_test.id
+}
