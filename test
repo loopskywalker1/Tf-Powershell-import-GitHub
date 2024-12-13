@@ -1,38 +1,76 @@
----
-- name: Check security tools installation and running state
-  hosts: all
-  gather_facts: no
+{
+  "Name": "Orthanc Production",
+  "HttpPort": 8042,
+  "HttpDescribeErrors": false,
+  "AuthenticationEnabled": true,
+  "RegisteredUsers": {
+    "admin": "supersecret"
+  },
+  "StorageDirectory": "/var/lib/orthanc/db",
+  "MaximumStorageSize": 102400,
+  "DicomAet": "ORTHANC",
+  "DicomPort": 4242,
+  "DefaultEncoding": "Latin1"
+}
 
-  vars:
-    security_services:
-      - name: bigfix
-        service_name: besclient
-      - name: crowdstrike
-        service_name: falcon-sensor
-      - name: qualys
-        service_name: qualys-cloud-agent
-      - name: splunk
-        service_name: splunkd
-      - name: tanium
-        service_name: taniumclient
+version: '3.8'
 
-tasks:
-    - name: Gather service facts
-      ansible.builtin.service_facts:
+services:
+  traefik:
+    image: traefik:v2.10
+    container_name: traefik
+    command:
+      - "--api.dashboard=true"
+      - "--providers.docker=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      # Let's Encrypt configuration
+      - "--certificatesresolvers.myresolver.acme.email=you@example.com"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.myresolver.acme.httpChallenge.entryPoint=web"
+    ports:
+      - "80:80"
+      - "443:443"
+      # If you want to see the Traefik dashboard, you can expose it:
+      # and protect it with simple auth or IP restrictions in production.
+      #- "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-certificates:/letsencrypt
+    restart: unless-stopped
 
-    - name: Aggregate service statuses
-      ansible.builtin.set_fact:
-        service_statuses: >-
-          {{
-            security_services
-            | items2dict(key='name', value=lambda x: {
-                'installed': (x.service_name in services),
-                'state': (services[x.service_name].state
-                          if x.service_name in services
-                          else 'not installed')
-              })
-          }}
+  orthanc:
+    image: orthancteam/orthanc:latest-full
+    container_name: orthanc
+    environment:
+      # Optionally set credentials via env if orthanc.json uses placeholders
+      # ORTHANC_ADMIN_USERNAME: admin
+      # ORTHANC_ADMIN_PASSWORD: supersecret
+    volumes:
+      - ./orthanc-config/orthanc.json:/etc/orthanc/orthanc.json:ro
+      - orthanc-data:/var/lib/orthanc/db
+    labels:
+      # Traefik HTTP to HTTPS redirection
+      - "traefik.enable=true"
+      - "traefik.http.routers.orthanc.rule=Host(`orthanc.example.com`)"
+      - "traefik.http.routers.orthanc.entrypoints=web"
+      - "traefik.http.middlewares.orthanc-redirect.redirectscheme.scheme=https"
+      - "traefik.http.routers.orthanc.middlewares=orthanc-redirect"
+      
+      # HTTPS Router
+      - "traefik.http.routers.orthanc-secure.rule=Host(`orthanc.example.com`)"
+      - "traefik.http.routers.orthanc-secure.entrypoints=websecure"
+      - "traefik.http.routers.orthanc-secure.tls=true"
+      - "traefik.http.routers.orthanc-secure.tls.certresolver=myresolver"
+      - "traefik.http.services.orthanc.loadbalancer.server.port=8042"
+    restart: unless-stopped
+    networks:
+      - default
 
-    - name: Show aggregated report
-      ansible.builtin.debug:
-        var: service_statuses
+volumes:
+  orthanc-data:
+  traefik-certificates:
+
+networks:
+  default:
+    external: false
