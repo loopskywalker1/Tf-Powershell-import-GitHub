@@ -1,0 +1,40 @@
+---
+- name: Check security tools installation and running state
+  hosts: all
+  gather_facts: no
+
+  vars:
+    security_services:
+      - name: bigfix
+        service_name: besclient
+      - name: crowdstrike
+        service_name: falcon-sensor
+      - name: qualys
+        service_name: qualys-cloud-agent
+      - name: splunk
+        service_name: splunkd
+      - name: tanium
+        service_name: taniumclient
+
+  tasks:
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Display installed and running state of security services
+      ansible.builtin.debug:
+        msg: |
+          {% for svc in security_services %}
+          {{ svc.name }}:
+            installed: {{ svc.service_name in services }}
+            state: {{ services[svc.service_name].state if svc.service_name in services else 'not installed' }}
+          {% endfor %}
+
+    - name: Fail if any required service is not running
+      ansible.builtin.fail:
+        msg: "One or more required security services are not running."
+      when: >
+        security_services
+        | selectattr('service_name', 'in', services.keys())
+        | map('extract', services)
+        | selectattr('state', 'ne', 'running')
+        | list | length > 0
