@@ -53,3 +53,97 @@ logging:
   options:
     max-size: "10m"
     max-file: "5"
+-----
+output.elasticsearch:
+  hosts: ["http://elasticsearch-host:9200"]
+  username: "elastic"
+  password: "your_password"
+
+setup.kibana:
+  host: "http://kibana-host:5601"
+
+metricbeat.modules:
+- module: system
+  metricsets:
+    - cpu
+    - memory
+    - network
+    - diskio
+    - load
+  enabled: true
+  period: 10s
+  processors:
+    - add_host_metadata: ~
+    - add_cloud_metadata: ~
+    - add_docker_metadata: ~
+
+---
+
+output.elasticsearch:
+  hosts: ["http://elasticsearch-host:9200"]
+  username: "elastic"
+  password: "your_password"
+
+setup.kibana:
+  host: "http://kibana-host:5601"
+
+filebeat.inputs:
+- type: log
+  enabled: true
+  paths:
+    - /var/log/*.log
+    - /var/log/syslog
+    - /var/log/auth.log
+
+processors:
+  - add_host_metadata: ~
+  - add_cloud_metadata: ~
+  - add_docker_metadata: ~
+---
+
+output.elasticsearch:
+  hosts: ["http://elasticsearch-host:9200"]
+  username: "elastic"
+  password: "your_password"
+
+setup.kibana:
+  host: "http://kibana-host:5601"
+
+heartbeat.monitors:
+- type: http
+  schedule: '@every 30s'
+  urls: ["http://your-service.com", "http://another-service.com"]
+  check.response:
+    status: 200
+- type: icmp
+  schedule: '@every 60s'
+  hosts: ["8.8.8.8", "8.8.4.4"]
+---
+output.elasticsearch:
+  hosts: ["http://elasticsearch-host:9200"]
+  username: "elastic"
+  password: "your_password"
+
+setup.kibana:
+  host: "http://kibana-host:5601"
+
+auditbeat.modules:
+- module: auditd
+  audit_rules: |
+    -a always,exit -F arch=b64 -S all -F key=64bit-abi
+    -a always,exit -F arch=b32 -S all -F key=32bit-abi
+
+- module: file_integrity
+  paths:
+    - /bin
+    - /usr/bin
+    - /sbin
+    - /usr/sbin
+    - /etc
+    - /var/log
+
+processors:
+  - add_host_metadata: ~
+  - add_cloud_metadata: ~
+
+
