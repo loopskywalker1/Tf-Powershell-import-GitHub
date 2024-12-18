@@ -1,76 +1,106 @@
-{
-  "Name": "Orthanc Production",
-  "HttpPort": 8042,
-  "HttpDescribeErrors": false,
-  "AuthenticationEnabled": true,
-  "RegisteredUsers": {
-    "admin": "supersecret"
-  },
-  "StorageDirectory": "/var/lib/orthanc/db",
-  "MaximumStorageSize": 102400,
-  "DicomAet": "ORTHANC",
-  "DicomPort": 4242,
-  "DefaultEncoding": "Latin1"
-}
+# config.yml
+beats_version: "7.17.0"
+elasticsearch_hosts:
+  - "http://your-elasticsearch-host:9200"
+kibana_host: "http://your-kibana-host:5601"
 
-version: '3.8'
 
-services:
-  traefik:
-    image: traefik:v2.10
-    container_name: traefik
-    command:
-      - "--api.dashboard=true"
-      - "--providers.docker=true"
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-      # Let's Encrypt configuration
-      - "--certificatesresolvers.myresolver.acme.email=you@example.com"
-      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
-      - "--certificatesresolvers.myresolver.acme.httpChallenge.entryPoint=web"
-    ports:
-      - "80:80"
-      - "443:443"
-      # If you want to see the Traefik dashboard, you can expose it:
-      # and protect it with simple auth or IP restrictions in production.
-      #- "8080:8080"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - traefik-certificates:/letsencrypt
-    restart: unless-stopped
+---
+- name: Install Beats on Linux Hosts
+  hosts: linux_hosts
+  become: true
+  vars_files:
+    - config.yml
 
-  orthanc:
-    image: orthancteam/orthanc:latest-full
-    container_name: orthanc
-    environment:
-      # Optionally set credentials via env if orthanc.json uses placeholders
-      # ORTHANC_ADMIN_USERNAME: admin
-      # ORTHANC_ADMIN_PASSWORD: supersecret
-    volumes:
-      - ./orthanc-config/orthanc.json:/etc/orthanc/orthanc.json:ro
-      - orthanc-data:/var/lib/orthanc/db
-    labels:
-      # Traefik HTTP to HTTPS redirection
-      - "traefik.enable=true"
-      - "traefik.http.routers.orthanc.rule=Host(`orthanc.example.com`)"
-      - "traefik.http.routers.orthanc.entrypoints=web"
-      - "traefik.http.middlewares.orthanc-redirect.redirectscheme.scheme=https"
-      - "traefik.http.routers.orthanc.middlewares=orthanc-redirect"
-      
-      # HTTPS Router
-      - "traefik.http.routers.orthanc-secure.rule=Host(`orthanc.example.com`)"
-      - "traefik.http.routers.orthanc-secure.entrypoints=websecure"
-      - "traefik.http.routers.orthanc-secure.tls=true"
-      - "traefik.http.routers.orthanc-secure.tls.certresolver=myresolver"
-      - "traefik.http.services.orthanc.loadbalancer.server.port=8042"
-    restart: unless-stopped
-    networks:
-      - default
+  tasks:
+    - name: Install required dependencies for RHEL-based systems
+      yum:
+        name:
+          - wget
+          - curl
+        state: present
 
-volumes:
-  orthanc-data:
-  traefik-certificates:
+    - name: Add Elastic GPG Key for RHEL-based systems
+      rpm_key:
+        state: present
+        key: https://artifacts.elastic.co/GPG-KEY-elasticsearch
 
-networks:
-  default:
-    external: false
+    - name: Add Elastic repository for RHEL-based systems
+      copy:
+        dest: /etc/yum.repos.d/elastic.repo
+        content: |
+          [elastic]
+          name=Elastic repository for 7.x packages
+          baseurl=https://artifacts.elastic.co/packages/7.x/yum
+          gpgcheck=1
+          gpgkey=https://artifacts.elastic.co/GPG-KEY-elasticsearch
+          enabled=1
+          autorefresh=1
+          type=rpm-md
+
+    - name: Install Filebeat and Metricbeat using yum
+      yum:
+        name:
+          - filebeat
+          - metricbeat
+        state: present
+
+    - name: Configure Filebeat
+      copy:
+        dest: /etc/filebeat/filebeat.yml
+        content: |
+          filebeat.inputs:
+            - type: log
+              enabled: true
+              paths:
+                - /var/log/*.log
+
+          output.elasticsearch:
+            hosts: {{ elasticsearch_hosts }}
+          setup.kibana:
+            host: {{ kibana_host }}
+      notify: restart filebeat
+
+    - name: Configure Metricbeat
+      copy:
+        dest: /etc/metricbeat/metricbeat.yml
+        content: |
+          metricbeat.modules:
+            - module: system
+              metricsets:
+                - cpu
+                - memory
+                - network
+                - filesystem
+              enabled: true
+              period: 10s
+              processes: ['.*']
+
+          output.elasticsearch:
+            hosts: {{ elasticsearch_hosts }}
+          setup.kibana:
+            host: {{ kibana_host }}
+      notify: restart metricbeat
+
+    - name: Enable and start Filebeat
+      service:
+        name: filebeat
+        enabled: yes
+        state: started
+
+    - name: Enable and start Metricbeat
+      service:
+        name: metricbeat
+        enabled: yes
+        state: started
+
+  handlers:
+    - name: restart filebeat
+      service:
+        name: filebeat
+        state: restarted
+
+    - name: restart metricbeat
+      service:
+        name: metricbeat
+        state: restarted
