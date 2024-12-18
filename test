@@ -1,106 +1,55 @@
-# config.yml
-beats_version: "7.17.0"
-elasticsearch_hosts:
-  - "http://your-elasticsearch-host:9200"
-kibana_host: "http://your-kibana-host:5601"
+VERSION=8.10.1
+NAMESPACE=my-elk-stack
 
+----
 
----
-- name: Install Beats on Linux Hosts
-  hosts: linux_hosts
-  become: true
-  vars_files:
-    - config.yml
+version: '3.3'
 
-  tasks:
-    - name: Install required dependencies for RHEL-based systems
-      yum:
-        name:
-          - wget
-          - curl
-        state: present
+services:
+  metricbeat:
+    image: "docker.elastic.co/beats/metricbeat:${VERSION}"
+    container_name: "${NAMESPACE}_metricbeat"
+    user: root
+    volumes:
+      - ./config/metricbeat.yml:/etc/metricbeat/metricbeat.yml:ro
+      - /sys/fs/cgroup:/hostfs/sys/fs/cgroup:ro
+      - /proc:/hostfs/proc:ro
+      - /:/hostfs:ro
+    network_mode: host
 
-    - name: Add Elastic GPG Key for RHEL-based systems
-      rpm_key:
-        state: present
-        key: https://artifacts.elastic.co/GPG-KEY-elasticsearch
+  filebeat:
+    image: "docker.elastic.co/beats/filebeat:${VERSION}"
+    container_name: "${NAMESPACE}_filebeat"
+    user: root
+    volumes:
+      - ./config/filebeat.yml:/etc/filebeat/filebeat.yml:ro
+      - /var/log:/usr/share/filebeat/logs:ro
+    network_mode: host
 
-    - name: Add Elastic repository for RHEL-based systems
-      copy:
-        dest: /etc/yum.repos.d/elastic.repo
-        content: |
-          [elastic]
-          name=Elastic repository for 7.x packages
-          baseurl=https://artifacts.elastic.co/packages/7.x/yum
-          gpgcheck=1
-          gpgkey=https://artifacts.elastic.co/GPG-KEY-elasticsearch
-          enabled=1
-          autorefresh=1
-          type=rpm-md
+  heartbeat:
+    image: "docker.elastic.co/beats/heartbeat:${VERSION}"
+    container_name: "${NAMESPACE}_heartbeat"
+    volumes:
+      - ./config/heartbeat.yml:/etc/heartbeat/heartbeat.yml:ro
+    network_mode: host
 
-    - name: Install Filebeat and Metricbeat using yum
-      yum:
-        name:
-          - filebeat
-          - metricbeat
-        state: present
+  auditbeat:
+    image: "docker.elastic.co/beats/auditbeat:${VERSION}"
+    container_name: "${NAMESPACE}_auditbeat"
+    user: root
+    volumes:
+      - ./config/auditbeat.yml:/etc/auditbeat/auditbeat.yml:ro
+      - /proc:/hostfs/proc:ro
+      - /:/hostfs:ro
+    network_mode: host
 
-    - name: Configure Filebeat
-      copy:
-        dest: /etc/filebeat/filebeat.yml
-        content: |
-          filebeat.inputs:
-            - type: log
-              enabled: true
-              paths:
-                - /var/log/*.log
+x-logging:
+  options:
+    max-size: "10m"
+    max-file: "5"
 
-          output.elasticsearch:
-            hosts: {{ elasticsearch_hosts }}
-          setup.kibana:
-            host: {{ kibana_host }}
-      notify: restart filebeat
-
-    - name: Configure Metricbeat
-      copy:
-        dest: /etc/metricbeat/metricbeat.yml
-        content: |
-          metricbeat.modules:
-            - module: system
-              metricsets:
-                - cpu
-                - memory
-                - network
-                - filesystem
-              enabled: true
-              period: 10s
-              processes: ['.*']
-
-          output.elasticsearch:
-            hosts: {{ elasticsearch_hosts }}
-          setup.kibana:
-            host: {{ kibana_host }}
-      notify: restart metricbeat
-
-    - name: Enable and start Filebeat
-      service:
-        name: filebeat
-        enabled: yes
-        state: started
-
-    - name: Enable and start Metricbeat
-      service:
-        name: metricbeat
-        enabled: yes
-        state: started
-
-  handlers:
-    - name: restart filebeat
-      service:
-        name: filebeat
-        state: restarted
-
-    - name: restart metricbeat
-      service:
-        name: metricbeat
-        state: restarted
+logging:
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "5"
