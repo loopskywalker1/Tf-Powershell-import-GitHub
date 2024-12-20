@@ -1,220 +1,77 @@
-version: '3.8'
+apiVersion: elasticsearch.k8s.elastic.co/v1
+kind: Elasticsearch
+metadata:
+  name: elasticsearch
+  namespace: monitoring
+spec:
+  version: 8.17.0
+  nodeSets:
+  - name: master-nodes
+    count: 3
+    config:
+      node.roles: ["master"]
+      node.store.allow_mmap: false
+      xpack.ml.enabled: true
+    podTemplate:
+      spec:
+        containers:
+        - name: elasticsearch
+          resources:
+            requests:
+              memory: "4Gi"
+              cpu: "0.5"
+            limits:
+              memory: "10Gi"
+              cpu: "1"
+    volumeClaimTemplates:
+    - metadata:
+        name: elasticsearch-data
+      spec:
+        accessModes:
+        - ReadWriteOnce
+        resources:
+          requests:
+            storage: 250Gi
+        storageClassName: longhorn
 
-services:
-  metricbeat:
-    image: "docker.elastic.co/beats/metricbeat:${VERSION}"
-    container_name: "${NAMESPACE}_metricbeat"
-    user: root
-    env_file: 
-      - .env
-    volumes:
-      - ./config/metricbeat.yml:/etc/metricbeat/metricbeat.yml:ro
-      - ./data/metricbeat:/usr/share/metricbeat/data
-      - /sys/fs/cgroup:/hostfs/sys/fs/cgroup:ro
-      - /proc:/hostfs/proc:ro
-      - /:/hostfs:ro
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    healthcheck:
-      test: ["CMD", "metricbeat", "test", "output"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    network_mode: host
+  - name: data-nodes
+    count: 3
+    config:
+      node.roles: ["data", "ingest"]
+      node.store.allow_mmap: false
+      xpack.ml.enabled: true
+    podTemplate:
+      spec:
+        containers:
+        - name: elasticsearch
+          resources:
+            requests:
+              memory: "4Gi"
+              cpu: "0.5"
+            limits:
+              memory: "10Gi"
+              cpu: "1"
+    volumeClaimTemplates:
+    - metadata:
+        name: elasticsearch-data
+      spec:
+        accessModes:
+        - ReadWriteOnce
+        resources:
+          requests:
+            storage: 250Gi
+        storageClassName: longhorn
 
-  filebeat:
-    image: "docker.elastic.co/beats/filebeat:${VERSION}"
-    container_name: "${NAMESPACE}_filebeat"
-    user: root
-    env_file: 
-      - .env
-    volumes:
-      - ./config/filebeat.yml:/etc/filebeat/filebeat.yml:ro
-      - ./data/filebeat:/usr/share/filebeat/data
-      - /var/log:/usr/share/filebeat/logs:ro
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    healthcheck:
-      test: ["CMD", "filebeat", "test", "output"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    network_mode: host
-
-  heartbeat:
-    image: "docker.elastic.co/beats/heartbeat:${VERSION}"
-    container_name: "${NAMESPACE}_heartbeat"
-    env_file: 
-      - .env
-    volumes:
-      - ./config/heartbeat.yml:/etc/heartbeat/heartbeat.yml:ro
-      - ./data/heartbeat:/usr/share/heartbeat/data
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    healthcheck:
-      test: ["CMD", "heartbeat", "test", "output"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    network_mode: host
-
-  auditbeat:
-    image: "docker.elastic.co/beats/auditbeat:${VERSION}"
-    container_name: "${NAMESPACE}_auditbeat"
-    user: root
-    env_file: 
-      - .env
-    volumes:
-      - ./config/auditbeat.yml:/etc/auditbeat/auditbeat.yml:ro
-      - ./data/auditbeat:/usr/share/auditbeat/data
-      - /proc:/hostfs/proc:ro
-      - /:/hostfs:ro
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    healthcheck:
-      test: ["CMD", "auditbeat", "test", "output"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    network_mode: host
----
-# Environment Variables
-VERSION=8.10.1
-NAMESPACE=my-elk-stack
-DOMAIN=example.com
-
-# Elasticsearch and Kibana credentials
-ELASTICSEARCH_HOST=http://elasticsearch-host:9200
-KIBANA_HOST=http://kibana-host:5601
-ELASTICSEARCH_USERNAME=elastic
-ELASTICSEARCH_PASSWORD=your_password
----
-output.elasticsearch:
-  hosts: ["${ELASTICSEARCH_HOST}"]
-  username: "${ELASTICSEARCH_USERNAME}"
-  password: "${ELASTICSEARCH_PASSWORD}"
-
-setup.kibana:
-  host: "${KIBANA_HOST}"
-
-setup.dashboards.enabled: true
-
-metricbeat.modules:
-- module: system
-  metricsets:
-    - cpu
-    - memory
-    - network
-    - diskio
-    - load
-  enabled: true
-  period: 10s
-  processors:
-    - add_host_metadata: ~
-    - add_cloud_metadata: ~
-    - add_docker_metadata: ~
----
-output.elasticsearch:
-  hosts: ["${ELASTICSEARCH_HOST}"]
-  username: "${ELASTICSEARCH_USERNAME}"
-  password: "${ELASTICSEARCH_PASSWORD}"
-
-setup.kibana:
-  host: "${KIBANA_HOST}"
-
-setup.dashboards.enabled: true
-
-filebeat.inputs:
-- type: log
-  enabled: true
-  paths:
-    - /var/log/*.log
-    - /var/log/syslog
-    - /var/log/auth.log
-
-processors:
-  - add_host_metadata: ~
-  - add_cloud_metadata: ~
-  - add_docker_metadata: ~
----
-output.elasticsearch:
-  hosts: ["${ELASTICSEARCH_HOST}"]
-  username: "${ELASTICSEARCH_USERNAME}"
-  password: "${ELASTICSEARCH_PASSWORD}"
-
-setup.kibana:
-  host: "${KIBANA_HOST}"
-
-setup.dashboards.enabled: true
-
-heartbeat.monitors:
-- type: http
-  schedule: '@every 30s'
-  urls: ["http://service1.com", "http://service2.com"]
-  check.response:
-    status: 200
-- type: icmp
-  schedule: '@every 60s'
-  hosts: ["8.8.8.8", "8.8.4.4"]
----
-output.elasticsearch:
-  hosts: ["${ELASTICSEARCH_HOST}"]
-  username: "${ELASTICSEARCH_USERNAME}"
-  password: "${ELASTICSEARCH_PASSWORD}"
-
-setup.kibana:
-  host: "${KIBANA_HOST}"
-
-setup.dashboards.enabled: true
-
-auditbeat.modules:
-- module: auditd
-  audit_rules: |
-    -a always,exit -F arch=b64 -S all -F key=64bit-abi
-    -a always,exit -F arch=b32 -S all -F key=32bit-abi
-
-- module: file_integrity
-  paths:
-    - /bin
-    - /usr/bin
-    - /sbin
-    - /usr/sbin
-    - /etc
-    - /var/log
-
-processors:
-  - add_host_metadata: ~
-  - add_cloud_metadata: ~
-
+  http:
+    service:
+      spec:
+        type: LoadBalancer
+        ports:
+        - name: https
+          nodePort: 31111
+          port: 9200
+          protocol: TCP
+          targetPort: 9200
+    tls:
+      certificate:
+        secretName: acidev-tls
